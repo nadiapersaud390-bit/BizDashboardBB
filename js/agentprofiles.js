@@ -5,14 +5,21 @@
 
 let allAgentProfiles = [];
 let apIsSubscribed = false;
+let apInitRetryTimer = null;
 
 window.initAgentProfiles = async function() {
-    if (apIsSubscribed) return;
-
     const container = document.getElementById('ap-agent-list');
-    if (!container) return;
 
-    container.innerHTML = '<div class="col-span-full py-10 text-center text-blue-400 text-[10px] font-black uppercase tracking-widest"><i class="fas fa-spinner fa-spin mr-2"></i>Loading Agents...</div>';
+    // The roster is shared by Profiles, Attendance, and performance tools. Start
+    // the Firebase listener even when the Profiles markup has not been mounted yet.
+    if (apIsSubscribed) {
+        if (container && typeof window.apFilterAgents === 'function') window.apFilterAgents();
+        return;
+    }
+
+    if (container) {
+        container.innerHTML = '<div class="col-span-full py-10 text-center text-blue-400 text-[10px] font-black uppercase tracking-widest"><i class="fas fa-spinner fa-spin mr-2"></i>Loading Agents...</div>';
+    }
 
     // Primary: RTDB biz_master_roster (real-time)
     if (typeof window.listenForMasterRoster === 'function') {
@@ -25,6 +32,10 @@ window.initAgentProfiles = async function() {
             allAgentProfiles = profiles;
             window.allAgentProfiles = allAgentProfiles;
             apFilterAgents();
+            if (typeof window.renderDailyAttendance === 'function') {
+                const attSection = document.getElementById('ah-sect-attendance');
+                if (attSection && !attSection.classList.contains('hidden')) window.renderDailyAttendance();
+            }
         });
         apIsSubscribed = true;
     } else if (typeof window.listenToAgentProfiles === 'function') {
@@ -33,10 +44,24 @@ window.initAgentProfiles = async function() {
             allAgentProfiles = profiles || [];
             window.allAgentProfiles = allAgentProfiles;
             apFilterAgents();
+            if (typeof window.renderDailyAttendance === 'function') {
+                const attSection = document.getElementById('ah-sect-attendance');
+                if (attSection && !attSection.classList.contains('hidden')) window.renderDailyAttendance();
+            }
         });
         apIsSubscribed = true;
     } else {
-        container.innerHTML = '<div class="col-span-full py-10 text-center text-red-400 font-bold uppercase tracking-widest">❌ Database Connection Failed</div>';
+        // Firebase's module script can finish a moment after the dashboard shell.
+        // Retry instead of leaving Profiles/Attendance permanently blank.
+        if (container) {
+            container.innerHTML = '<div class="col-span-full py-10 text-center text-blue-400 text-[10px] font-black uppercase tracking-widest"><i class="fas fa-spinner fa-spin mr-2"></i>Connecting to roster...</div>';
+        }
+        if (!apInitRetryTimer) {
+            apInitRetryTimer = setTimeout(() => {
+                apInitRetryTimer = null;
+                if (!apIsSubscribed && typeof window.initAgentProfiles === 'function') window.initAgentProfiles();
+            }, 500);
+        }
     }
 };
 

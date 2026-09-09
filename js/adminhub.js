@@ -160,60 +160,74 @@ function getAdminPermissions(adminEmail) {
 // regular admins never get an empty Profiles/Attendance workspace.
 window.loadAdminHubProfiles = async function() {
     const host = document.getElementById('ah-profiles-host');
-    if (!host) return false;
-
-    if (!host.dataset.loaded) {
-        host.innerHTML = '<div class="py-16 text-center text-blue-400 text-xs font-black uppercase tracking-widest"><i class="fas fa-spinner fa-spin mr-2"></i>Loading Profiles...</div>';
-        try {
-            const response = await fetch('tabs/agentprofiles.html?v=5', { cache: 'no-store' });
-            if (!response.ok) throw new Error('Profiles template returned ' + response.status);
-            const html = await response.text();
-            if (!html || !html.includes('ap-agent-list')) throw new Error('Profiles template was empty or invalid');
-            host.innerHTML = html;
-            host.dataset.loaded = '1';
-        } catch (e) {
-            console.error('[AdminHub] Profiles failed to load:', e);
-            host.innerHTML = '<div class="py-16 text-center"><div class="text-red-400 text-xs font-black uppercase tracking-widest mb-3">Profiles could not load</div><button type="button" onclick="loadAdminHubProfiles()" class="px-4 py-2 rounded-xl bg-blue-500/20 border border-blue-500/30 text-blue-300 text-[10px] font-black uppercase">Retry</button></div>';
-            delete host.dataset.loaded;
-            return false;
-        }
+    if (!host) {
+        console.error('[AdminHub] Profiles host is missing from the Admin Hub DOM');
+        return false;
     }
 
-    // initAgentProfiles may already be subscribed from another workspace.
-    // apFilterAgents always renders the current roster into the newly mounted host.
-    if (typeof window.initAgentProfiles === 'function') await window.initAgentProfiles();
-    if (typeof window.apFilterAgents === 'function') window.apFilterAgents();
+    // Mount from the inert template shipped inside adminpanel.html. This avoids a
+    // second fetch and fixes deployments where the tab button appeared but the
+    // nested profile fragment never rendered.
+    if (!host.dataset.loaded) {
+        const tpl = document.getElementById('ah-profiles-template');
+        if (!tpl || !tpl.content) {
+            host.innerHTML = '<div class="py-16 text-center text-red-400 text-xs font-black uppercase tracking-widest">Profiles template is unavailable. Reload the dashboard.</div>';
+            return false;
+        }
+        host.replaceChildren(tpl.content.cloneNode(true));
+        host.dataset.loaded = '1';
+    }
+
+    // Start/refresh the shared roster only after the profile DOM exists.
+    try {
+        if (typeof window.initAgentProfiles === 'function') await window.initAgentProfiles();
+        if (typeof window.apFilterAgents === 'function') window.apFilterAgents();
+    } catch (e) {
+        console.error('[AdminHub] Profiles failed to initialize:', e);
+        const list = document.getElementById('ap-agent-list');
+        if (list) list.innerHTML = '<div class="col-span-full py-12 text-center text-red-400 text-xs font-black uppercase tracking-widest">Profiles could not initialize. Please reload and try again.</div>';
+        return false;
+    }
     return true;
 };
 
 window.loadAdminHubAttendance = async function() {
     const host = document.getElementById('ah-attendance-host');
-    if (!host) return false;
+    if (!host) {
+        console.error('[AdminHub] Attendance host is missing from the Admin Hub DOM');
+        return false;
+    }
 
+    // Mount the complete Attendance UI from a local inert template. No nested
+    // page request is required, so the section cannot open as an empty panel.
     if (!host.dataset.loaded) {
-        host.innerHTML = '<div class="py-16 text-center text-blue-400 text-xs font-black uppercase tracking-widest"><i class="fas fa-spinner fa-spin mr-2"></i>Loading Attendance...</div>';
-        try {
-            const response = await fetch('tabs/adminattendance.html?v=2', { cache: 'no-store' });
-            if (!response.ok) throw new Error('Attendance template returned ' + response.status);
-            const html = await response.text();
-            if (!html || !html.includes('att-daily-list')) throw new Error('Attendance template was empty or invalid');
-            host.innerHTML = html;
-            host.dataset.loaded = '1';
-        } catch (e) {
-            console.error('[AdminHub] Attendance failed to load:', e);
-            host.innerHTML = '<div class="py-16 text-center"><div class="text-red-400 text-xs font-black uppercase tracking-widest mb-3">Attendance could not load</div><button type="button" onclick="loadAdminHubAttendance()" class="px-4 py-2 rounded-xl bg-blue-500/20 border border-blue-500/30 text-blue-300 text-[10px] font-black uppercase">Retry</button></div>';
-            delete host.dataset.loaded;
+        const tpl = document.getElementById('ah-attendance-template');
+        if (!tpl || !tpl.content) {
+            host.innerHTML = '<div class="py-16 text-center text-red-400 text-xs font-black uppercase tracking-widest">Attendance template is unavailable. Reload the dashboard.</div>';
             return false;
         }
+        host.replaceChildren(tpl.content.cloneNode(true));
+        host.dataset.loaded = '1';
     }
 
-    const picker = document.getElementById('att-date-picker');
-    if (picker && !picker.value) {
-        picker.value = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guyana' });
-        ahAttSelectedDate = picker.value;
+    try {
+        // Attendance depends on the active roster. initAgentProfiles now starts
+        // the subscription even if the Profiles workspace has never been opened.
+        if (typeof window.initAgentProfiles === 'function') await window.initAgentProfiles();
+
+        const picker = document.getElementById('att-date-picker');
+        if (picker && !picker.value) {
+            picker.value = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guyana' });
+            ahAttSelectedDate = picker.value;
+        }
+        if (typeof window.ahPopulateMonthSelect === 'function') window.ahPopulateMonthSelect();
+        if (typeof window.renderDailyAttendance === 'function') await window.renderDailyAttendance();
+    } catch (e) {
+        console.error('[AdminHub] Attendance failed to initialize:', e);
+        const list = document.getElementById('att-daily-list');
+        if (list) list.innerHTML = '<tr><td colspan="7" class="py-10 text-center text-red-400 text-xs font-black uppercase tracking-widest">Attendance could not initialize. Please reload and try again.</td></tr>';
+        return false;
     }
-    if (typeof window.ahPopulateMonthSelect === 'function') window.ahPopulateMonthSelect();
-    if (typeof window.renderDailyAttendance === 'function') await window.renderDailyAttendance();
     return true;
 };
 
