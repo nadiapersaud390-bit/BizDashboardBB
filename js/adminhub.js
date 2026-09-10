@@ -215,12 +215,9 @@ window.loadAdminHubAttendance = async function() {
         // the subscription even if the Profiles workspace has never been opened.
         if (typeof window.initAgentProfiles === 'function') await window.initAgentProfiles();
 
-        const picker = document.getElementById('att-date-picker');
-        if (picker && !picker.value) {
-            picker.value = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guyana' });
-            ahAttSelectedDate = picker.value;
-        }
+        if (!ahAttSelectedDate) ahAttSelectedDate = ahGetTodayISO();
         if (typeof window.ahPopulateMonthSelect === 'function') window.ahPopulateMonthSelect();
+        if (typeof window.ahSyncAttendancePicker === 'function') window.ahSyncAttendancePicker();
         if (typeof window.renderDailyAttendance === 'function') await window.renderDailyAttendance();
     } catch (e) {
         console.error('[AdminHub] Attendance failed to initialize:', e);
@@ -1690,6 +1687,108 @@ function ahAttHeaderParts(dateIso) {
     };
 }
 
+function ahGetTodayISO() {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guyana' });
+}
+
+function ahAttDateToWeekValue(dateIso) {
+    const d = ahAttParseISODate(dateIso) || ahAttParseISODate(ahGetTodayISO()) || new Date();
+    const utc = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const dayNum = utc.getUTCDay() || 7;
+    utc.setUTCDate(utc.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+    const weekNum = Math.ceil((((utc - yearStart) / 86400000) + 1) / 7);
+    return `${utc.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+}
+
+function ahAttWeekValueToMondayISO(weekVal) {
+    const m = String(weekVal || '').match(/^(\d{4})-W(\d{2})$/);
+    if (!m) return null;
+    const year = Number(m[1]);
+    const week = Number(m[2]);
+    if (!Number.isFinite(year) || !Number.isFinite(week) || week < 1 || week > 53) return null;
+    const jan4 = new Date(Date.UTC(year, 0, 4));
+    const jan4Day = jan4.getUTCDay() || 7;
+    const monday = new Date(jan4);
+    monday.setUTCDate(jan4.getUTCDate() - jan4Day + 1 + ((week - 1) * 7));
+    return `${monday.getUTCFullYear()}-${String(monday.getUTCMonth() + 1).padStart(2, '0')}-${String(monday.getUTCDate()).padStart(2, '0')}`;
+}
+
+function ahAttSyncMonthSelectFromDate() {
+    const sel = document.getElementById('att-month-select');
+    const monthVal = String(ahAttSelectedDate || ahGetTodayISO()).slice(0, 7);
+    if (!sel) return monthVal;
+    if (!sel.options || !sel.options.length) {
+        if (typeof window.ahPopulateMonthSelect === 'function') window.ahPopulateMonthSelect();
+    }
+    const exists = Array.from(sel.options || []).some(o => o.value === monthVal);
+    if (!exists && monthVal) {
+        const [year, month] = monthVal.split('-').map(Number);
+        if (Number.isFinite(year) && Number.isFinite(month)) {
+            const d = new Date(year, month - 1, 1);
+            const opt = document.createElement('option');
+            opt.value = monthVal;
+            opt.textContent = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+            sel.insertBefore(opt, sel.firstChild || null);
+        }
+    }
+    sel.value = monthVal;
+    return monthVal;
+}
+
+window.ahSyncAttendancePicker = function() {
+    const view = ahAttCurrentView || 'daily';
+    const modeSel = document.getElementById('att-range-mode');
+    const helper = document.getElementById('att-picker-helper');
+    const dailyWrap = document.getElementById('att-picker-daily-wrap');
+    const weeklyWrap = document.getElementById('att-picker-weekly-wrap');
+    const monthlyWrap = document.getElementById('att-picker-monthly-wrap');
+    const dateInp = document.getElementById('att-date-picker');
+    const weekInp = document.getElementById('att-week-picker');
+    const monthInp = document.getElementById('att-month-picker');
+
+    if (modeSel) modeSel.value = view;
+    if (dailyWrap) dailyWrap.classList.toggle('hidden', view !== 'daily');
+    if (weeklyWrap) weeklyWrap.classList.toggle('hidden', view !== 'weekly');
+    if (monthlyWrap) monthlyWrap.classList.toggle('hidden', view !== 'monthly');
+
+    if (!ahAttSelectedDate) ahAttSelectedDate = ahGetTodayISO();
+    if (dateInp) dateInp.value = ahAttSelectedDate;
+    if (weekInp) weekInp.value = ahAttDateToWeekValue(ahAttSelectedDate);
+    const monthVal = String(ahAttSelectedDate).slice(0, 7);
+    if (monthInp) monthInp.value = monthVal;
+    ahAttSyncMonthSelectFromDate();
+
+    if (helper) {
+        let text = 'Choose a single date to view or edit attendance.';
+        if (view === 'weekly') text = 'Choose any work week. Attendance will show Monday to Friday for that week.';
+        if (view === 'monthly') text = 'Choose any month. Attendance will show Monday to Friday for the selected month.';
+        helper.textContent = text;
+    }
+};
+
+window.ahChangeAttPickerMode = function(mode) {
+    const next = ['daily', 'weekly', 'monthly'].includes(String(mode)) ? String(mode) : 'daily';
+    window.switchAttView(next);
+};
+
+window.ahAttWeekChanged = function(weekVal) {
+    const monday = ahAttWeekValueToMondayISO(weekVal);
+    if (!monday) return;
+    ahAttSelectedDate = monday;
+    if (typeof window.ahSyncAttendancePicker === 'function') window.ahSyncAttendancePicker();
+    ahLoadWeeklyMatrix(ahAttFilterTeam);
+};
+
+window.ahAttMonthChanged = function(monthVal) {
+    const m = String(monthVal || '').match(/^(\d{4}-\d{2})$/);
+    if (!m) return;
+    ahAttSelectedDate = `${m[1]}-01`;
+    ahAttSyncMonthSelectFromDate();
+    if (typeof window.ahSyncAttendancePicker === 'function') window.ahSyncAttendancePicker();
+    ahLoadMonthlyMatrix();
+};
+
 function ahAttEscape(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -1899,6 +1998,7 @@ window.ahOpenAgentAttendanceHistory = async function(encodedAgentId, encodedName
 
 window.ahAttDateChanged = function(dateStr) {
     if (dateStr) ahAttSelectedDate = dateStr;
+    if (typeof window.ahSyncAttendancePicker === 'function') window.ahSyncAttendancePicker();
 
     if (ahAttCurrentView === 'weekly') {
         ahLoadWeeklyMatrix(ahAttFilterTeam);
@@ -1906,12 +2006,7 @@ window.ahAttDateChanged = function(dateStr) {
     }
 
     if (ahAttCurrentView === 'monthly') {
-        const sel = document.getElementById('att-month-select');
-        const monthKey = String(ahAttSelectedDate || '').slice(0, 7);
-        if (sel && monthKey) {
-            const exists = Array.from(sel.options || []).some(o => o.value === monthKey);
-            if (exists) sel.value = monthKey;
-        }
+        ahAttSyncMonthSelectFromDate();
         ahLoadMonthlyMatrix();
         return;
     }
@@ -1934,13 +2029,13 @@ window.switchAttView = function(view) {
         }
     });
 
+    if (typeof window.ahSyncAttendancePicker === 'function') window.ahSyncAttendancePicker();
+
     if (view === 'daily') renderDailyAttendance();
     if (view === 'weekly') ahLoadWeeklyMatrix(ahAttFilterTeam);
     if (view === 'monthly') {
         if (typeof window.ahPopulateMonthSelect === 'function') window.ahPopulateMonthSelect();
-        const sel = document.getElementById('att-month-select');
-        const monthKey = String(ahAttSelectedDate || '').slice(0, 7);
-        if (sel && monthKey && Array.from(sel.options || []).some(o => o.value === monthKey)) sel.value = monthKey;
+        ahAttSyncMonthSelectFromDate();
         ahLoadMonthlyMatrix();
     }
 };
@@ -1961,9 +2056,7 @@ async function renderDailyAttendance() {
     const list = document.getElementById('att-daily-list');
     if (!list) return;
 
-    // Update date picker if present
-    const picker = document.getElementById('att-date-picker');
-    if (picker && !picker.value) picker.value = ahAttSelectedDate;
+    if (typeof window.ahSyncAttendancePicker === 'function') window.ahSyncAttendancePicker();
 
     list.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-blue-400 text-[10px] font-black uppercase tracking-widest"><i class="fas fa-spinner fa-spin mr-2"></i>Loading attendance...</td></tr>';
 
@@ -2216,28 +2309,33 @@ window.ahCloseAttEdit = function() {
 window.ahPopulateMonthSelect = function() {
     const sel = document.getElementById('att-month-select');
     if (!sel) return;
-    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Guyana' }));
+    const baseDate = ahAttParseISODate(ahAttSelectedDate) || new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Guyana' }));
     sel.innerHTML = '';
-    for (let i = 0; i < 6; i++) {
-        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const val = d.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit' });
+    for (let i = 0; i < 12; i++) {
+        const d = new Date(baseDate.getFullYear(), baseDate.getMonth() - i, 1);
+        const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
         const label = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
         const opt = document.createElement('option');
         opt.value = val;
         opt.textContent = label;
         sel.appendChild(opt);
     }
+    ahAttSyncMonthSelectFromDate();
 };
 
 window.ahLoadMonthlyMatrix = async function() {
     const container = document.getElementById('att-monthly-matrix');
     if (!container) return;
     const sel = document.getElementById('att-month-select');
-    const monthVal = sel ? sel.value : null;
+    let monthVal = sel ? sel.value : null;
+    if (!monthVal) monthVal = String(ahAttSelectedDate || ahGetTodayISO()).slice(0, 7);
     if (!monthVal) {
         container.innerHTML = '<div class="py-10 text-slate-500 text-center font-bold">Select a month above.</div>';
         return;
     }
+    if (sel) sel.value = monthVal;
+    ahAttSelectedDate = `${monthVal}-01`;
+    if (typeof window.ahSyncAttendancePicker === 'function') window.ahSyncAttendancePicker();
 
     container.innerHTML = '<div class="py-10 text-blue-400 text-center font-bold text-[10px] uppercase tracking-widest"><i class="fas fa-spinner fa-spin mr-2"></i>Loading Monday–Friday monthly attendance...</div>';
 
