@@ -1654,8 +1654,86 @@ window.ahSelectAttReport = function(id) {
     renderDailyAttendance();
 };
 
+function ahAttParseISODate(iso) {
+    const parts = String(iso || '').split('-').map(Number);
+    if (parts.length !== 3 || parts.some(n => !Number.isFinite(n))) return null;
+    // Midday local time avoids UTC/date-boundary weekday shifts in Guyana.
+    return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0, 0);
+}
+
+function ahAttDateToISO(date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function ahAttGetWorkWeek(dateIso) {
+    const selected = ahAttParseISODate(dateIso) || new Date();
+    const dow = selected.getDay(); // Sun=0 ... Sat=6
+    const daysFromMonday = (dow + 6) % 7;
+    const monday = new Date(selected);
+    monday.setDate(selected.getDate() - daysFromMonday);
+    monday.setHours(12, 0, 0, 0);
+    const days = [];
+    for (let i = 0; i < 5; i++) {
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
+        days.push(ahAttDateToISO(d));
+    }
+    return days;
+}
+
+function ahAttHeaderParts(dateIso) {
+    const d = ahAttParseISODate(dateIso);
+    if (!d) return { weekday: '', date: dateIso };
+    return {
+        weekday: d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase(),
+        date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase()
+    };
+}
+
+function ahAttEscape(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function ahAttStatusMeta(status) {
+    const key = String(status || '').trim();
+    const map = {
+        'Training':     { label: 'TRAINING', short: 'T',  cls: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' },
+        'Present':      { label: 'PRESENT',  short: 'P',  cls: 'text-green-400 bg-green-500/10 border-green-500/20' },
+        'Late':         { label: 'LATE',     short: 'L',  cls: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20' },
+        'Absent':       { label: 'ABSENT',   short: 'A',  cls: 'text-red-400 bg-red-500/10 border-red-500/20' },
+        'Personal Out': { label: 'P. OUT',   short: 'PO', cls: 'text-orange-400 bg-orange-500/10 border-orange-500/20' },
+        'Vacation':     { label: 'VACATION', short: 'V',  cls: 'text-purple-400 bg-purple-500/10 border-purple-500/20' },
+        'Sick':         { label: 'SICK',     short: 'S',  cls: 'text-rose-400 bg-rose-500/10 border-rose-500/20' },
+        'Off':          { label: 'OFF',      short: 'O',  cls: 'text-slate-400 bg-slate-500/10 border-slate-500/20' },
+        'Holiday':      { label: 'HOLIDAY',  short: 'H',  cls: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20' }
+    };
+    return map[key] || { label: '—', short: '—', cls: 'text-slate-600 bg-white/[0.02] border-white/5' };
+}
+
 window.ahAttDateChanged = function(dateStr) {
     if (dateStr) ahAttSelectedDate = dateStr;
+
+    if (ahAttCurrentView === 'weekly') {
+        ahLoadWeeklyMatrix(ahAttFilterTeam);
+        return;
+    }
+
+    if (ahAttCurrentView === 'monthly') {
+        const sel = document.getElementById('att-month-select');
+        const monthKey = String(ahAttSelectedDate || '').slice(0, 7);
+        if (sel && monthKey) {
+            const exists = Array.from(sel.options || []).some(o => o.value === monthKey);
+            if (exists) sel.value = monthKey;
+        }
+        ahLoadMonthlyMatrix();
+        return;
+    }
+
     renderDailyAttendance();
 };
 
@@ -1676,7 +1754,13 @@ window.switchAttView = function(view) {
 
     if (view === 'daily') renderDailyAttendance();
     if (view === 'weekly') ahLoadWeeklyMatrix(ahAttFilterTeam);
-    if (view === 'monthly') ahLoadMonthlyMatrix();
+    if (view === 'monthly') {
+        if (typeof window.ahPopulateMonthSelect === 'function') window.ahPopulateMonthSelect();
+        const sel = document.getElementById('att-month-select');
+        const monthKey = String(ahAttSelectedDate || '').slice(0, 7);
+        if (sel && monthKey && Array.from(sel.options || []).some(o => o.value === monthKey)) sel.value = monthKey;
+        ahLoadMonthlyMatrix();
+    }
 };
 
 window.filterAttTeam = function(team) {
@@ -1966,21 +2050,34 @@ window.ahLoadMonthlyMatrix = async function() {
     if (!container) return;
     const sel = document.getElementById('att-month-select');
     const monthVal = sel ? sel.value : null;
-    if (!monthVal) { container.innerHTML = '<div class="py-10 text-slate-500 text-center font-bold">Select a month above.</div>'; return; }
+    if (!monthVal) {
+        container.innerHTML = '<div class="py-10 text-slate-500 text-center font-bold">Select a month above.</div>';
+        return;
+    }
 
-    container.innerHTML = '<div class="py-10 text-blue-400 text-center font-bold text-[10px] uppercase tracking-widest"><i class="fas fa-spinner fa-spin mr-2"></i>Loading monthly data...</div>';
+    container.innerHTML = '<div class="py-10 text-blue-400 text-center font-bold text-[10px] uppercase tracking-widest"><i class="fas fa-spinner fa-spin mr-2"></i>Loading Monday–Friday monthly attendance...</div>';
 
     const [year, month] = monthVal.split('-').map(Number);
     const daysInMonth = new Date(year, month, 0).getDate();
     const days = [];
-    for (let d = 1; d <= daysInMonth; d++) {
-        const iso = `${year}-${String(month).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        const dow = new Date(iso).getDay();
-        if (dow !== 0) days.push(iso); // skip Sundays
+
+    // Monthly attendance is Monday-Friday only. Build dates using local midday
+    // so browser timezone conversion cannot move a date to the previous day.
+    for (let day = 1; day <= daysInMonth; day++) {
+        const local = new Date(year, month - 1, day, 12, 0, 0, 0);
+        const dow = local.getDay();
+        if (dow >= 1 && dow <= 5) days.push(ahAttDateToISO(local));
     }
 
-    const roster = (window.allAgentProfiles || []).filter(p => {
-        if (p.status === 'Inactive') return false;
+    let roster = [];
+    try {
+        roster = await ahGetActiveRoster();
+    } catch (e) {
+        roster = (window.allAgentProfiles || []).slice();
+    }
+    roster = roster.filter(p => {
+        const status = String(p.status || '').toLowerCase();
+        if (['inactive','quit','fired','deleted','archived'].includes(status)) return false;
         if (ahAttFilterTeam === 'ALL') return true;
         return normalizeTeam(p.team, p.fullName) === ahAttFilterTeam;
     });
@@ -1990,106 +2087,151 @@ window.ahLoadMonthlyMatrix = async function() {
         return;
     }
 
-    let allRecs = {};
+    const allRecs = {};
     if (typeof window.getAttendanceForDate === 'function') {
-        const results = await Promise.all(days.map(dt => window.getAttendanceForDate(dt)));
+        const results = await Promise.all(days.map(dt => window.getAttendanceForDate(dt).catch(() => ({}))));
         days.forEach((dt, i) => { allRecs[dt] = results[i] || {}; });
     }
 
-    const shortDays = days.map(dt => {
-        const d = new Date(dt + 'T12:00:00');
-        return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' });
-    });
+    const monthLabel = new Date(year, month - 1, 1, 12).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const teamLabel = ahAttFilterTeam === 'ALL' ? 'All Teams' : ahAttFilterTeam === 'BB' ? 'Berbice' : ahAttFilterTeam === 'PR' ? 'Providence' : 'Remote';
 
-    const statusColor = s => s === 'Present' ? '#22c55e' : s === 'Late' ? '#eab308' : s === 'Absent' ? '#ef4444' : '#374151';
-    const statusLetter = s => s === 'Present' ? 'P' : s === 'Late' ? 'L' : s === 'Absent' ? 'A' : '—';
+    let html = `<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+            <div class="text-[10px] font-black text-blue-400 uppercase tracking-[0.18em]">Monthly Attendance</div>
+            <div class="text-sm font-black text-white mt-1">${ahAttEscape(monthLabel)} <span class="text-slate-500">• Monday–Friday</span></div>
+        </div>
+        <div class="px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-[9px] font-black text-slate-400 uppercase tracking-widest">${ahAttEscape(teamLabel)}</div>
+    </div>`;
 
-    let html = `<table class="text-[9px] font-bold min-w-full border-collapse">
-        <thead><tr class="sticky top-0 bg-[#070d1a] z-10">
-            <th class="py-2 px-3 text-left text-slate-400 font-black uppercase whitespace-nowrap min-w-[140px]">Agent</th>`;
-    days.forEach((dt, i) => {
-        html += `<th class="py-2 px-1 text-center text-slate-500 whitespace-nowrap">${shortDays[i]}</th>`;
+    html += `<div class="overflow-x-auto pb-2"><table class="text-[9px] font-bold min-w-max w-full border-collapse">
+        <thead><tr class="sticky top-0 bg-[#0f1420] z-10 border-b border-white/10">
+            <th class="py-3 px-3 text-left text-slate-400 font-black uppercase whitespace-nowrap min-w-[170px] sticky left-0 bg-[#0f1420] z-20">Agent</th>`;
+
+    days.forEach(dt => {
+        const hp = ahAttHeaderParts(dt);
+        html += `<th class="py-2 px-2 text-center min-w-[62px] whitespace-nowrap">
+            <div class="text-[8px] font-black text-blue-400 tracking-wider">${hp.weekday}</div>
+            <div class="text-[9px] font-black text-slate-300 mt-0.5">${hp.date}</div>
+        </th>`;
     });
-    html += `<th class="py-2 px-3 text-center text-slate-400">%</th></tr></thead><tbody>`;
+    html += `<th class="py-2 px-3 text-center text-slate-400 min-w-[62px]">ATT %</th></tr></thead><tbody>`;
 
     roster.forEach(p => {
-        const agentId = String(p.userId);
-        let presentCount = 0;
-        html += `<tr class="border-b border-white/5 hover:bg-white/5 transition">
-            <td class="py-2 px-3 text-white font-black whitespace-nowrap uppercase text-[10px]">${p.fullName}</td>`;
+        const agentId = String(p.userId || p.ytelId || '');
+        let attendedCount = 0;
+        let recordedCount = 0;
+        html += `<tr class="border-b border-white/5 hover:bg-white/[0.03] transition">
+            <td class="py-2.5 px-3 text-white font-black whitespace-nowrap uppercase text-[10px] sticky left-0 bg-[#111622] z-[5]">
+                ${ahAttEscape(p.fullName || p.name || 'Unknown')}<br><span class="text-[8px] text-slate-600">${ahAttEscape(agentId)}</span>
+            </td>`;
+
         days.forEach(dt => {
             const rec = allRecs[dt] && allRecs[dt][agentId];
-            const s = rec ? rec.status : 'Absent';
-            if (s === 'Present' || s === 'Late') presentCount++;
-            html += `<td class="py-2 px-1 text-center">
-                <span style="color:${statusColor(s)}" title="${s} on ${dt}">${statusLetter(s)}</span>
+            const status = rec && rec.status ? rec.status : '';
+            const meta = ahAttStatusMeta(status);
+            if (status) {
+                recordedCount++;
+                if (status === 'Present' || status === 'Late' || status === 'Training') attendedCount++;
+            }
+            html += `<td class="py-2 px-1 text-center" title="${ahAttEscape(status || 'No attendance record')} • ${dt}">
+                <span class="inline-flex min-w-[27px] justify-center px-1.5 py-1 rounded-lg border text-[8px] font-black ${meta.cls}">${meta.short}</span>
             </td>`;
         });
-        const pct = days.length > 0 ? Math.round((presentCount / days.length) * 100) : 0;
-        const pctColor = pct >= 90 ? 'text-green-400' : pct >= 70 ? 'text-yellow-400' : 'text-red-400';
-        html += `<td class="py-2 px-3 text-center font-black ${pctColor}">${pct}%</td></tr>`;
+
+        const pct = recordedCount > 0 ? Math.round((attendedCount / recordedCount) * 100) : null;
+        const pctClass = pct === null ? 'text-slate-600' : pct >= 90 ? 'text-green-400' : pct >= 70 ? 'text-yellow-400' : 'text-red-400';
+        html += `<td class="py-2 px-3 text-center font-black ${pctClass}">${pct === null ? '—' : pct + '%'}</td></tr>`;
     });
 
-    html += '</tbody></table>';
-    html += '<div class="flex gap-4 mt-4 text-[9px] font-black uppercase tracking-widest">'
-        + '<span style="color:#22c55e">■ P = Present</span>'
-        + '<span style="color:#eab308">■ L = Late</span>'
-        + '<span style="color:#ef4444">■ A = Absent</span>'
-        + '<span class="text-slate-500">— = No Data</span></div>';
+    html += '</tbody></table></div>';
+    html += `<div class="flex flex-wrap gap-x-4 gap-y-2 mt-4 text-[8px] font-black uppercase tracking-widest text-slate-500">
+        <span class="text-green-400">P = Present</span>
+        <span class="text-yellow-400">L = Late</span>
+        <span class="text-indigo-400">T = Training</span>
+        <span class="text-red-400">A = Absent</span>
+        <span class="text-orange-400">PO = Personal Out</span>
+        <span class="text-purple-400">V = Vacation</span>
+        <span class="text-rose-400">S = Sick</span>
+        <span>O = Off</span>
+        <span class="text-cyan-400">H = Holiday</span>
+        <span>— = No Record</span>
+    </div>`;
     container.innerHTML = html;
 };
 
 async function ahLoadWeeklyMatrix(team) {
     const container = document.getElementById('att-weekly-matrix');
     if (!container) return;
-    if (team === 'ALL') {
-        container.innerHTML = '<div class="py-10 text-slate-600 font-bold uppercase text-[10px] tracking-widest border border-dashed border-white/10 rounded-2xl text-center">Select BB, PR, or RM to load weekly data</div>';
-        return;
-    }
 
-    container.innerHTML = '<div class="py-10 text-blue-400 font-bold uppercase text-[10px] tracking-widest text-center"><i class="fas fa-spinner fa-spin mr-2"></i> Loading weekly attendance from Firebase...</div>';
+    container.innerHTML = '<div class="py-10 text-blue-400 font-bold uppercase text-[10px] tracking-widest text-center"><i class="fas fa-spinner fa-spin mr-2"></i> Loading Monday–Friday attendance from Firebase...</div>';
 
-    // Build list of past 6 working days (Mon-Sat)
-    const days = [];
-    const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Guyana' }));
-    while (days.length < 6) {
-        const dow = d.getDay(); // 0=Sun, 6=Sat
-        if (dow !== 0) {
-            days.unshift(d.toLocaleDateString('en-CA', { timeZone: 'America/Guyana' }));
-        }
-        d.setDate(d.getDate() - 1);
-    }
+    // A weekly report is always the calendar workweek containing the selected
+    // attendance date: Monday, Tuesday, Wednesday, Thursday, Friday.
+    const days = ahAttGetWorkWeek(ahAttSelectedDate);
 
-    // Fetch all days in parallel
     const allRecs = await Promise.all(days.map(dt =>
-        typeof window.getAttendanceForDate === 'function' ? window.getAttendanceForDate(dt) : Promise.resolve({})
+        typeof window.getAttendanceForDate === 'function'
+            ? window.getAttendanceForDate(dt).catch(() => ({}))
+            : Promise.resolve({})
     ));
 
-    const roster = (window.allAgentProfiles || []).filter(p =>
-        normalizeTeam(p.team, p.fullName) === team && p.status !== 'Inactive'
-    );
+    let roster = [];
+    try {
+        roster = await ahGetActiveRoster();
+    } catch (e) {
+        roster = (window.allAgentProfiles || []).slice();
+    }
+
+    roster = roster.filter(p => {
+        const status = String(p.status || '').toLowerCase();
+        if (['inactive','quit','fired','deleted','archived'].includes(status)) return false;
+        if (team === 'ALL') return true;
+        return normalizeTeam(p.team, p.fullName) === team;
+    });
 
     if (roster.length === 0) {
-        container.innerHTML = '<div class="py-10 text-slate-500 font-bold uppercase text-[10px] tracking-widest text-center">No agents for this team.</div>';
+        container.innerHTML = '<div class="py-10 text-slate-500 font-bold uppercase text-[10px] tracking-widest text-center">No agents found for this team filter.</div>';
         return;
     }
 
-    const dayLabels = days.map(dt => {
-        const d2 = new Date(dt + 'T12:00:00');
-        return d2.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-    });
+    const first = ahAttParseISODate(days[0]);
+    const last = ahAttParseISODate(days[4]);
+    const rangeLabel = first && last
+        ? `${first.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${last.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+        : `${days[0]} – ${days[4]}`;
+    const teamLabel = team === 'ALL' ? 'All Teams' : team === 'BB' ? 'Berbice' : team === 'PR' ? 'Providence' : 'Remote';
 
-    let html = '<div class="overflow-x-auto"><table class="w-full text-left"><thead><tr class="text-[9px] font-black text-slate-500 border-b border-white/10"><th class="p-3">Agent</th>';
-    dayLabels.forEach(dl => { html += `<th class="p-2 text-center text-[8px]">${dl}</th>`; });
+    let html = `<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+            <div class="text-[10px] font-black text-blue-400 uppercase tracking-[0.18em]">Work Week</div>
+            <div class="text-sm font-black text-white mt-1">${ahAttEscape(rangeLabel)} <span class="text-slate-500">• Monday–Friday</span></div>
+        </div>
+        <div class="px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-[9px] font-black text-slate-400 uppercase tracking-widest">${ahAttEscape(teamLabel)}</div>
+    </div>`;
+
+    html += '<div class="overflow-x-auto"><table class="w-full min-w-[780px] text-left"><thead><tr class="text-[9px] font-black text-slate-500 border-b border-white/10"><th class="p-3 min-w-[190px]">Agent</th>';
+    days.forEach(dt => {
+        const hp = ahAttHeaderParts(dt);
+        html += `<th class="p-2 text-center min-w-[112px]">
+            <div class="text-[9px] font-black text-blue-400 tracking-[0.12em]">${hp.weekday}</div>
+            <div class="text-[10px] font-black text-slate-300 mt-1">${hp.date}</div>
+        </th>`;
+    });
     html += '</tr></thead><tbody>';
 
     roster.forEach(p => {
-        html += `<tr class="hover:bg-white/5 border-b border-white/5"><td class="py-2 px-3 text-[11px] font-black text-white uppercase">${p.fullName}<br><span class="text-[8px] text-slate-500">${p.userId}</span></td>`;
-        allRecs.forEach(recs => {
-            const rec = recs[String(p.userId)];
-            const st = rec ? rec.status : 'Absent';
-            const cls = st === 'Present' ? 'text-green-400 bg-green-500/10' : st === 'Late' ? 'text-yellow-400 bg-yellow-500/10' : 'text-red-500/60 bg-red-500/5';
-            html += `<td class="py-2 px-1 text-center"><span class="text-[8px] font-black px-1.5 py-0.5 rounded ${cls}">${st === 'Absent' ? '—' : st.toUpperCase()}</span></td>`;
+        const agentId = String(p.userId || p.ytelId || '');
+        html += `<tr class="hover:bg-white/[0.03] border-b border-white/5">
+            <td class="py-3 px-3 text-[11px] font-black text-white uppercase">${ahAttEscape(p.fullName || p.name || 'Unknown')}<br><span class="text-[8px] text-slate-500">${ahAttEscape(agentId)}</span></td>`;
+
+        allRecs.forEach((recs, idx) => {
+            const rec = recs && recs[agentId];
+            const status = rec && rec.status ? rec.status : '';
+            const meta = ahAttStatusMeta(status);
+            html += `<td class="py-3 px-1 text-center" title="${ahAttEscape(status || 'No attendance record')} • ${days[idx]}">
+                <span class="inline-flex items-center justify-center px-2 py-1 rounded-lg border text-[8px] font-black whitespace-nowrap ${meta.cls}">${status ? meta.label : '—'}</span>
+            </td>`;
         });
         html += '</tr>';
     });
