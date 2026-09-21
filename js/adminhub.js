@@ -20,12 +20,12 @@ const ahTeamColors = {
 window._RESTRICTED_ADMIN_IDS = ['0000'];
 
 
-const ADMIN_HUB_TABS = ['stats', 'rebuttals', 'performance', 'zero', 'targetboard', 'profiles', 'attendance'];
+const ADMIN_HUB_TABS = ['stats', 'rebuttals', 'performance', 'zero', 'targetboard', 'profiles', 'attendance', 'breaks'];
 const ADMIN_HUB_LEGACY_DEFAULT_HIDDEN = ['profiles', 'attendance'];
 
 function _hiddenTabsFromPermissionMap(permissionMap) {
     if (!permissionMap || typeof permissionMap !== 'object' || Array.isArray(permissionMap)) return null;
-    return ADMIN_HUB_TABS.filter(tab => permissionMap[tab] !== true);
+    return ADMIN_HUB_TABS.filter(tab => tab === 'breaks' ? permissionMap[tab] === false : permissionMap[tab] !== true);
 }
 
 function _getCurrentAdminHubHiddenTabs() {
@@ -99,7 +99,7 @@ window.applyAdminHubPermissions = function() {
 window.ensureAgentProfileModal = async function() {
     if (document.getElementById('ap-modal-overlay')) return true;
     try {
-        const html = await fetch('tabs/agentprofiles.html?v=5').then(r => r.ok ? r.text() : Promise.reject(new Error('Profile template unavailable')));
+        const html = await fetch('tabs/agentprofiles.html?v=9').then(r => r.ok ? r.text() : Promise.reject(new Error('Profile template unavailable')));
         const doc = new DOMParser().parseFromString(html, 'text/html');
         const modal = doc.getElementById('ap-modal-overlay') || doc.getElementById('ap-modal');
         if (modal) {

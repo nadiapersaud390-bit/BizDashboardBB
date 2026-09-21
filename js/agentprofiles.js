@@ -77,9 +77,32 @@ window.apAutoFillYtel = function() {
     ytelInput.value = `${prefix} ${name.trim().toUpperCase()} (${team})`;
 };
 
+// Older cached profile fragments may not contain the scheduled-break inputs.
+// Upgrade their form before opening or saving so an absent input cannot abort the editor.
+window.apEnsureBreakFields = function(form) {
+    if (!form) return;
+    // Remove restrictions from older cached profile forms as well.
+    for (const slot of ['morning', 'afternoon']) {
+        const input = form.querySelector('#ap-break-' + slot);
+        if (input) { input.removeAttribute('min'); input.removeAttribute('max'); }
+    }
+    if (form.querySelector('#ap-break-morning')) return;
+    form.insertAdjacentHTML('beforeend', `<fieldset class="col-span-full border border-blue-400/20 rounded-2xl p-4 space-y-3">
+                            <legend class="text-sm font-bold text-blue-300 px-2">Scheduled breaks</legend>
+                            <p class="text-xs text-slate-400">Guyana time. Admins may choose any time for either break. Each break is available once per day, from its scheduled time. Leave a time blank to disable that break.</p>
+                            <div class="grid grid-cols-2 gap-3">
+                                <label class="text-xs text-slate-300">Morning start<input id="ap-break-morning" type="time" class="mt-2 w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white"></label>
+                                <label class="text-xs text-slate-300">Morning minutes<input id="ap-break-morning-minutes" type="number" min="1" max="120" step="1" value="10" required class="mt-2 w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white"></label>
+                                <label class="text-xs text-slate-300">Afternoon start<input id="ap-break-afternoon" type="time" class="mt-2 w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white"></label>
+                                <label class="text-xs text-slate-300">Afternoon minutes<input id="ap-break-afternoon-minutes" type="number" min="1" max="120" step="1" value="10" required class="mt-2 w-full bg-slate-900 border border-slate-600 rounded-xl p-3 text-white"></label>
+                            </div>
+                        </fieldset>`);
+};
+
 // Form Submission
 window.apHandleSubmit = async function(e) {
     e.preventDefault();
+    window.apEnsureBreakFields(document.getElementById('ap-form'));
     const statusDiv = document.getElementById('ap-submit-status');
     const saveBtn = document.getElementById('ap-save-btn');
 
@@ -102,8 +125,19 @@ window.apHandleSubmit = async function(e) {
         return;
     }
 
+    const breakSchedule = {};
+    for (const slot of ['morning', 'afternoon']) {
+        const time = document.getElementById('ap-break-' + slot).value;
+        const minutes = Number(document.getElementById('ap-break-' + slot + '-minutes').value);
+        if (!Number.isInteger(minutes) || minutes < 1 || minutes > 120 ||
+            (time && (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)))) {
+            statusDiv.textContent = 'Enter a valid ' + slot + ' start time and 1 to 120 whole minutes.';
+            return;
+        }
+        breakSchedule[slot] = { time, minutes };
+    }
     const hidden = !!(document.getElementById('ap-hidden-toggle') || {}).checked;
-    const agentData = { userId, fullName, team, ytelName, shift, status, lunchTime: lunch, breakTime: breakVal, hidden };
+    const agentData = { userId, fullName, team, ytelName, shift, status, lunchTime: lunch, breakTime: breakVal, breakSchedule, hidden };
 
     saveBtn.disabled = true;
     saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Saving...';
@@ -159,7 +193,7 @@ window.apFilterAgents = function() {
 
     const q = search.toLowerCase();
     const filtered = allAgentProfiles.filter(p => {
-        const matchSearch = (p.fullName || '').toLowerCase().includes(q) || (p.userId || '').includes(q) || (p.ytelName || '').toLowerCase().includes(q);
+        const matchSearch = (p.fullName || '').toLowerCase().includes(q) || String(p.userId || '').includes(q) || (p.ytelName || '').toLowerCase().includes(q);
         const matchTeam = teamFilter === 'ALL' || p.team === teamFilter;
         return matchSearch && matchTeam;
     });
@@ -427,7 +461,10 @@ if (!window.__apEscapeCloseBound) {
 }
 
 // Open popup modal
-window.apOpenModal = function(mode = 'add', userId = null) {
+window.apOpenModal = async function(mode = 'add', userId = null, sourceProfile = null) {
+    if (!document.getElementById('ap-modal-overlay') && typeof window.ensureAgentProfileModal === 'function') {
+        await window.ensureAgentProfileModal();
+    }
     const overlay = document.getElementById('ap-modal-overlay');
     const form = document.getElementById('ap-form');
     const title = document.getElementById('ap-modal-title');
@@ -437,7 +474,9 @@ window.apOpenModal = function(mode = 'add', userId = null) {
     const userIdInput = document.getElementById('ap-userid');
     const saveBtn = document.getElementById('ap-save-btn');
 
-    if (!overlay || !form) { console.error('Agent modal not found'); return; }
+    if (!overlay || !form) { alert('The agent editor could not load. Please refresh the page and try again.'); return; }
+
+    window.apEnsureBreakFields(form);
 
     window.apPrepareModalForViewport(overlay);
 
@@ -446,8 +485,9 @@ window.apOpenModal = function(mode = 'add', userId = null) {
     if (saveBtn) { saveBtn.disabled = false; saveBtn.innerText = 'Save Profile'; }
 
     if (mode === 'edit' && userId) {
-        const agent = allAgentProfiles.find(p => p.userId === userId);
-        if (!agent) return;
+        const agent = sourceProfile && String(sourceProfile.userId) === String(userId)
+            ? sourceProfile : allAgentProfiles.find(p => String(p.userId) === String(userId));
+        if (!agent) { alert('This agent profile is no longer available. Refresh Profiles and try again.'); return; }
 
         if (title) title.innerText = 'Edit Agent';
         if (modeInput) modeInput.value = 'edit';
@@ -464,6 +504,11 @@ window.apOpenModal = function(mode = 'add', userId = null) {
         document.getElementById('ap-lunch').value = agent.lunchTime || '';
         const brk = document.getElementById('ap-break');
         if (brk) brk.value = agent.breakTime || '';
+        for (const slot of ['morning', 'afternoon']) {
+            const schedule = agent.breakSchedule?.[slot] || {};
+            document.getElementById('ap-break-' + slot).value = schedule.time || '';
+            document.getElementById('ap-break-' + slot + '-minutes').value = schedule.minutes || 10;
+        }
 
         // Hidden toggle
         const hiddenSection = document.getElementById('ap-hidden-section');
