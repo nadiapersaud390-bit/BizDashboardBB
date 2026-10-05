@@ -20,7 +20,6 @@ function getGuyanaToday() {
   return valid.includes(dayName) ? dayName : 'Monday';
 }
 const PRANK_API_URL = 'https://script.google.com/macros/s/AKfycbxWKiLsRSpxOkes8wgArJ0fa6Ww4hA6EYqgik_lithTNeVrG9Qec3tOHeLRgecfcH6SVA/exec';
-
 function normalizeTeam(team, name) {
   const rawTeam = String(team || '').trim().toUpperCase();
   const rawName = String(name || '').trim().toUpperCase();
