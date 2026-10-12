@@ -4,6 +4,8 @@
 
 The **Admin Calendar** button is available on the dashboard navigation and in Admin Tools / Super Admin. It appears only after the current admin's live access record is verified. Agents never receive the button or calendar subscriptions.
 
+Agents now have a separate **Request time off / My requests** button. Their requests appear in this calendar and can be approved or declined by admins with Calendar access. Agents receive only their own request subscriptions. See `TIME-OFF-REQUESTS.md` for the workflow, new data path, and deployment requirements.
+
 Superadmin opens **Edit Admin > Admin Tools Access**, checks **Calendar**, then saves. The Calendar button appears beside Attendance in the Admin Hub tab row. The existing **Admin Calendar > Manage access** control also stays synchronized with this permission. Every regular admin starts with access off. Granted admins can view, create, edit, delete, and receive calendar reminders. Only the master superadmin can change this calendar allowlist. This permission is independent of the other Admin Tools permissions.
 
 Revoking access removes the button, closes and clears the calendar, unsubscribes from its data, and closes active calendar desktop notifications. There is no local permission fallback. Deleting the admin's directory record also removes calendar access.
@@ -23,6 +25,8 @@ Revoking access removes the button, closes and clears the calendar, unsubscribes
 ## Reminders
 
 Event reminders can be set for the event time, 15 minutes, 1 hour, 1 day, 3 days or 1 week beforehand, or disabled. Events without a time use 9 AM Guyana time. Birthdays remind from 7 days before at 9 AM; holidays from 1 day before at 9 AM.
+
+Approved agent requests stay on the calendar and in **Upcoming approved time off** while current or upcoming. Their reminders appear at 9 AM Guyana time the day before and again on each approved date, with separate dismissal keys. Dismissing a reminder never deletes the calendar entry.
 
 The inbox and dashboard badge show due reminders for all teams, independently of the calendar filters. Dismissal syncs in Firebase for that admin account, so another admin retains their own reminder. Editing an event creates a new reminder revision. Reminders remain available until the event's final day ends. On reopening the dashboard, still-relevant reminders are shown again unless dismissed.
 
